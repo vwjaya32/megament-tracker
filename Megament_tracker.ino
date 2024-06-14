@@ -3,21 +3,23 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
-#include <WiFiClientSecure.h>
+// #include <WiFiClientSecure.h>
+#include <WiFiClient.h>
 #include <HTTPClient.h>
 
-const char* ssid = "access-point-name";
-const char* password = "ssid-password";
-const char* serverName = "https://megaman.haggy.buzz/location";
+const char* ssid = "OPPO A92";
+const char* password = "mcdjv1234";
+const char* serverName = "http://34.101.96.10:8005/location";
+// const char* serverName = "https://jsonplaceholder.typicode.com/posts";
 const int trackerId = 1;
-const char* accessToken = "secret";
+const char* accessToken = "bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOjEsImVtYWlsIjoidXNlcjFAZXhhbXBsZS5jb20iLCJ1c2VybmFtZSI6InVzZXIxIiwiaWF0IjoxNzE3MzkwNTM5fQ.Gs6LXDhnxlSiTapfbeVMl2w2DPNimslUTY-4Ky8-Ta8";
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 TinyGPSPlus gps;
-WiFiClientSecure client;
+// WiFiClientSecure client;
 
 typedef struct {
   double lat;
@@ -40,36 +42,42 @@ void coreTask1(void* param) {
 void coreTask2(void* param) {
   while (true) {
     handleWiFiAndAPI();
-    delay(1000);
+    delay(5000);
   }
 }
 
 void setup() {
-  Serial.begin(9600);
-  Serial2.begin(9600, SERIAL_8N1, 16, 17);
+  Serial.begin(115200);
+  // Serial2.begin(9600, SERIAL_8N1, 16, 17);
+  Serial2.begin(115200, SERIAL_8N1, 16, 17);
 
-  // Setup OLED Screen 
+  // Check and setup OLED display
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
     Serial.println(F("SSD1306 allocation failed"));
     for (;;);
+  } else {
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(WHITE);
   }
-  
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(WHITE);
-  display.setCursor(0, 10);
 
-  // Connecting to Wifi
+  // Connect to SSID
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
-    Serial.print(".");
+    displayConnecting();
   }
 
   delay(3000);
-  display.clearDisplay();
 
-  client.setInsecure();
+  display.clearDisplay();
+  display.setCursor(35, 16);
+  display.print("Connected");
+  display.display();
+
+  delay(3000);
+
+  // client.setInsecure();
 
   xTaskCreatePinnedToCore(coreTask1, "Task1", 10000, NULL, 1, &Task1, 0);
   xTaskCreatePinnedToCore(coreTask2, "Task2", 10000, NULL, 1, &Task2, 1);
@@ -86,18 +94,37 @@ void updateGPSAndDisplay() {
     Serial.println(F("No GPS detected: check wiring."));
   }
 
-  displayInfo();
+  displayGPSInfo();
 }
 
-void displayInfo() {
+void displayConnecting(){
+  display.clearDisplay();
+  display.setCursor(30, 16);
+  display.print("Connecting");
+  display.display();
+  for (int i = 0; i < 3; i++) {
+    display.print(".");
+    display.display();
+  }
+}
+
+void displayGPSInfo() {
   if (gps.location.isValid()) {
     display.clearDisplay();
+
     display.setCursor(0, 0);
+    display.print("SSID: ");
+    display.print(WiFi.SSID());
+
+    display.setCursor(0, 16);
     display.print("Lat: ");
     display.print(gps.location.lat(), 6);
-    display.setCursor(0, 16);
+    display.setCursor(0, 32);
     display.print("Lon: ");
     display.print(gps.location.lng(), 6);
+    display.setCursor(0, 48);
+    display.print("Cached Index: ");
+    display.print(cacheIndex);
     display.display();
   } else {
     display.clearDisplay();
@@ -124,7 +151,8 @@ String getTimestampString(unsigned long timestamp) {
 void handleWiFiAndAPI() {
   if (WiFi.status() == WL_CONNECTED) {
     HTTPClient http;
-    http.begin(client, serverName);
+    // http.begin(client, serverName);
+    http.begin(serverName);
     http.addHeader("Content-Type", "application/json");
     http.addHeader("Authorization", accessToken);
 
@@ -135,6 +163,7 @@ void handleWiFiAndAPI() {
     while (cacheIndex > 0) {
       Serial.println("Sending cached requests.. index:"+String(cacheIndex));
       String postData = "{\"trackerId\":" + String(trackerId) + ", \"latitude\":" + String(cachedData[cacheIndex - 1].lat, 6) + ", \"longitude\":" + String(cachedData[cacheIndex - 1].lon, 6) + ", \"timestamp\":\"" + getTimestampString(cachedData[cacheIndex - 1].timestamp) + "\"}";
+
       httpResponseCode = http.POST(postData);
 
       if (httpResponseCode == 200 || httpResponseCode == 201) {
@@ -152,15 +181,16 @@ void handleWiFiAndAPI() {
     }
 
     // Send current GPS data if available
-    if (gps.location.isValid()) {  
+    if (gps.location.isValid()) {
       String postData = "{\"trackerId\":" + String(trackerId) + ", \"latitude\":" + String(gps.location.lat(), 6) + ", \"longitude\":" + String(gps.location.lng(), 6) + ", \"timestamp\":\"" + getTimestampString(millis() / 1000) + "\"}";
-      
+
       httpResponseCode = http.POST(postData);
 
       if (httpResponseCode == 200 || httpResponseCode == 201) {
         requestSuccessful = true;
         Serial.println("HTTP POST Successful");
       } else {
+        Serial.println(String(httpResponseCode));
         requestSuccessful = false;
         Serial.println("Error in sending HTTP POST request: " + String(httpResponseCode));
         
